@@ -5,6 +5,11 @@ at the close of t + lag and earns returns from the next day on. Between rebalanc
 weights are held constant (no drift), a standard simplification of vectorised backtests.
 Weights: the long side sums to +1 and the short side to -1, so the return is the long-short spread.
 Costs: turnover (sum of absolute weight changes) times commission plus slippage, in basis points.
+
+Two optional turnover controls, both past-only:
+  smoothing_halflife: scores are ranked per date and averaged exponentially over past dates;
+  exit_fraction: a holding buffer. A name enters a side in the top (bottom) `fraction` and stays
+    until it leaves the top (bottom) `exit_fraction`; the freed slots go to the best new names.
 """
 
 import math
@@ -13,6 +18,8 @@ from typing import Literal
 
 import numpy as np
 import polars as pl
+
+from quant_core.features import cross_sectional_rank
 
 
 @dataclass(frozen=True)
@@ -24,6 +31,8 @@ class BacktestConfig:
     vol_window: int = 21
     commission_bps: float = 1.0
     slippage_bps: float = 5.0
+    smoothing_halflife: float = 0.0
+    exit_fraction: float | None = None
 
     @property
     def cost_rate(self) -> float:
@@ -47,21 +56,59 @@ def daily_returns(prices: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+def smooth_scores(scores: pl.DataFrame, halflife: float) -> pl.DataFrame:
+    """Per-date ranks averaged exponentially over each ticker's past dates (halflife in dates).
+
+    Ranking first puts every fold's predictions on the same scale.
+    """
+    if halflife <= 0:
+        return scores
+    ranked = cross_sectional_rank(scores.drop_nulls("score"), ["score"])
+    return ranked.sort("ticker", "date").with_columns(
+        pl.col("score").ewm_mean(half_life=halflife).over("ticker")
+    )
+
+
+def _buffered_sides(df: pl.DataFrame, fraction: float, exit_fraction: float) -> pl.DataFrame:
+    """Select sides date by date, keeping held names while they stay inside the exit band."""
+    held = {1: set(), -1: set()}
+    rows: list[tuple] = []
+    for (day,), frame in df.sort("date").partition_by("date", as_dict=True, maintain_order=True).items():
+        order = frame.sort("score", "ticker", descending=[True, False])["ticker"].to_list()
+        n = len(order)
+        m = max(1, math.floor(n * fraction))
+        band = max(m, math.floor(n * exit_fraction))
+        if n < 2 * band:
+            band = m
+        if n < 2 * m:
+            held = {1: set(), -1: set()}
+            continue
+        for side, ranked in ((1, order), (-1, order[::-1])):
+            keep = [t for t in ranked[:band] if t in held[side]]
+            taken = set(keep) | (held[-side] if side == -1 else set())
+            new = [t for t in ranked if t not in taken][: m - len(keep)]
+            held[side] = set(keep) | set(new)
+            rows.extend((day, t, side) for t in held[side])
+    return pl.DataFrame(rows, schema={"date": pl.Date, "ticker": pl.String, "side": pl.Int32}, orient="row")
+
+
 def target_weights(scores: pl.DataFrame, config: BacktestConfig) -> pl.DataFrame:
     """Long the top fraction and short the bottom fraction of each date's scores.
 
-    scores: date, ticker, score and, for inverse-vol weighting, vol.
+    scores: date, ticker, score and, for inverse-vol weighting, vol. Dates must be the
+    rebalance dates only, since the holding buffer carries positions from one to the next.
     """
-    n = pl.len().over("date")
-    m = (n * config.fraction).floor().clip(lower_bound=1)
-    rank = pl.col("score").rank("ordinal", descending=True).over("date")
-    side = pl.when(rank <= m).then(1).when(rank > n - m).then(-1).otherwise(0)
-    df = (
-        scores.drop_nulls("score")
-        .sort("date", "ticker")
-        .with_columns(side=side, m=m, n=n)
-        .filter(pl.col("side") != 0, pl.col("n") >= 2 * pl.col("m"))
-    )
+    scores = scores.drop_nulls("score").sort("date", "ticker")
+    exit_fraction = config.exit_fraction
+    if exit_fraction is None or exit_fraction <= config.fraction:
+        n = pl.len().over("date")
+        m = (n * config.fraction).floor().clip(lower_bound=1)
+        rank = pl.col("score").rank("ordinal", descending=True).over("date")
+        side = pl.when(rank <= m).then(1).when(rank > n - m).then(-1).otherwise(0)
+        df = scores.with_columns(side=side, m=m, n=n).filter(pl.col("side") != 0, pl.col("n") >= 2 * pl.col("m"))
+    else:
+        sides = _buffered_sides(scores, config.fraction, exit_fraction)
+        df = scores.join(sides, on=["date", "ticker"], how="inner").sort("date", "ticker")
     if config.weighting == "equal":
         raw = pl.lit(1.0)
     elif config.weighting == "inverse_vol":
@@ -85,6 +132,7 @@ def run_backtest(scores: pl.DataFrame, returns: pl.DataFrame, config: BacktestCo
     day = pl.DataFrame({"date": calendar}).with_row_index("day")
     col = pl.DataFrame({"ticker": tickers}).with_row_index("col")
 
+    scores = smooth_scores(scores, config.smoothing_halflife)
     signal_dates = scores.select(pl.col("date").unique()).join(day, on="date").sort("day")
     rebalances = signal_dates.gather_every(config.rebalance_every)
 
