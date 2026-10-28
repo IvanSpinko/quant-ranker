@@ -21,6 +21,13 @@ uv sync
 uv run pytest
 ```
 
+Research run (downloads about 15 years of S&P 500 prices into `data/`, then evaluates every model
+walk-forward); the findings are in [research/01_stage1_findings.ipynb](research/01_stage1_findings.ipynb):
+
+```bash
+uv run python research/stage1.py
+```
+
 ## License
 
 [AGPL-3.0](LICENSE)
