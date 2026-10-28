@@ -1,0 +1,32 @@
+[package]
+name = "quant-ranker-app"
+version = "0.1.0"
+description = "Quant Ranker desktop app"
+license = "AGPL-3.0-only"
+edition = "2024"
+
+[lib]
+name = "quant_ranker_lib"
+crate-type = ["rlib"]
+
+[dependencies]
+arrow-array = "60.1.0"
+arrow-cast = "60.1.0"
+arrow-schema = "60.1.0"
+parquet = { version = "60.1.0", default-features = false, features = ["arrow", "zstd", "snap"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tauri = { version = "2.12.5", features = [] }
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[dev-dependencies]
+serde_json = { version = "1.0.154", features = ["float_roundtrip"] }

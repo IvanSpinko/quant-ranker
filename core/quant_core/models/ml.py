@@ -64,6 +64,11 @@ class LGBMModel:
     def predict(self, X: pl.DataFrame) -> np.ndarray:
         return self.model.predict(X.to_numpy())
 
+    def contributions(self, X: pl.DataFrame) -> pl.DataFrame:
+        """Per-row SHAP contributions (LightGBM's TreeSHAP) plus the shared base value."""
+        values = self.model.booster_.predict(X.to_numpy(), pred_contrib=True)
+        return pl.DataFrame(values, schema=[*self.features, "base_value"], orient="row")
+
     def feature_importance(self) -> pl.DataFrame:
         gain = self.model.booster_.feature_importance("gain").astype(float)
         return pl.DataFrame({"feature": self.features, "gain": gain}).sort("gain", descending=True)

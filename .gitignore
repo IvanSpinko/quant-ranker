@@ -33,3 +33,6 @@ tfplan*
 .env
 *.env
 *.key
+
+# Tauri generated schemas
+app/src-tauri/gen/

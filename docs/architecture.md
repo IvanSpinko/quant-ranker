@@ -28,23 +28,32 @@ AWS (Python, shared quant_core package)
 Desktop app (Tauri 2: Rust + React/TypeScript)
   - reads published/manifest.json and downloads only changed files
   - keeps a local Parquet cache and works offline on the last snapshot
-  - runs the backtest locally in Rust (Polars), nothing else
+  - runs the backtest locally in Rust (arrow + parquet crates, plain arrays), nothing else
 ```
+
+The Rust backtest is a port of the Python reference. A golden test (`app/src-tauri/tests/golden.rs`)
+checks it against outputs written by `tests/make_golden.py`, and a second test checks it against
+the Python run on the real published data when that data is present.
 
 ### What the cloud publishes
 
 | File | Content |
 |---|---|
-| `manifest.json` | Versions, hashes and update date of every published file |
+| `manifest.json` | Versions, hashes and update date of every published file; data dates, models, features, default backtest |
+| `universe.parquet` | Tickers with name, sector and industry |
 | `signals/latest.parquet` | Today's scores and ranks per ticker |
-| `signals/history.parquet` | Historical out-of-sample scores (walk-forward) per date and ticker |
-| `returns/forward.parquet` | Realised forward returns needed by the backtest |
-| `features/latest.parquet` | Feature values shown on the stock detail screen |
-| `explain/shap.parquet` | Per-ticker feature contributions |
-| `quality/*.parquet` | IC by period, model comparison, feature importance |
+| `signals/history/<model>.parquet` | Historical out-of-sample scores (walk-forward) per date and ticker, one file per model |
+| `returns/daily.parquet` | Daily close-to-close returns per ticker, used by the backtest and the growth chart |
+| `returns/market.parquet` | Daily SPY returns, the benchmark |
+| `features/latest.parquet` | Ranked feature values shown on the stock detail screen |
+| `explain/shap.parquet` | Per-ticker feature contributions (LightGBM TreeSHAP) and the base value |
+| `quality/*.parquet` | Daily IC per model, model comparison, feature importance |
 
 Raw vendor prices are not redistributed. Only derived data is published. Check the data vendor's
 terms before publishing anything.
+
+Until the AWS pipeline exists, `research/publish_local.py` writes the same layout to
+`data/published/`, which debug builds of the app read by default.
 
 ### Desktop app screens
 
