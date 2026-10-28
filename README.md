@@ -28,6 +28,13 @@ walk-forward); the findings are in [research/01_stage1_findings.ipynb](research/
 uv run python research/stage1.py
 ```
 
+Turnover reduction on top of those scores (smoothing, holding buffer, rebalance frequency), written
+up in [research/02_turnover.ipynb](research/02_turnover.ipynb):
+
+```bash
+uv run python research/turnover.py
+```
+
 ## License
 
 [AGPL-3.0](LICENSE)

@@ -7,6 +7,7 @@ from quant_core.backtest.engine import (
     equity_curve,
     performance_summary,
     run_backtest,
+    smooth_scores,
     target_weights,
     yearly_returns,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "equity_curve",
     "performance_summary",
     "run_backtest",
+    "smooth_scores",
     "target_weights",
     "yearly_returns",
 ]
