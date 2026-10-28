@@ -5,6 +5,7 @@ pub mod backtest;
 pub mod commands;
 pub mod data;
 pub mod dates;
+pub mod sync;
 
 use tauri::Manager;
 
@@ -23,6 +24,8 @@ pub fn run() {
             commands::quality,
             commands::get_settings,
             commands::set_data_dir,
+            commands::set_data_url,
+            commands::sync_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Quant Ranker app");

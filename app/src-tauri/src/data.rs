@@ -2,7 +2,7 @@
 //!
 //! Every part is loaded on first use and kept in memory; signal histories load per model.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -14,6 +14,7 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
 
 use crate::backtest::{Config, Returns, Score};
+use crate::sync::FileEntry;
 
 pub type Result<T> = std::result::Result<T, String>;
 
@@ -92,6 +93,18 @@ pub struct Manifest {
     pub models: Vec<String>,
     pub features: Vec<String>,
     pub default_backtest: Config,
+    /// Every published file with its hash; yearly return files are found through it.
+    #[serde(default)]
+    pub files: BTreeMap<String, FileEntry>,
+    #[serde(default)]
+    pub live_model: Option<serde_json::Value>,
+}
+
+impl Manifest {
+    /// Published files under a folder such as "returns/daily/", in name (year) order.
+    pub fn files_in(&self, folder: &str) -> Vec<String> {
+        self.files.keys().filter(|k| k.starts_with(folder) && k.ends_with(".parquet")).cloned().collect()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -212,17 +225,30 @@ impl Store {
     }
 
     pub fn returns(&self) -> Result<Arc<Returns>> {
+        let files = self.manifest()?.files_in("returns/daily/");
         self.returns.get(|| {
-            let t = self.table("returns/daily.parquet")?;
-            let (dates, tickers, rets) = (t.dates("date")?, t.strings("ticker")?, t.floats("ret")?);
-            Ok(Returns::from_rows(dates.into_iter().zip(tickers).zip(rets).map(|((d, t), r)| (d, t, r))))
+            let mut rows = Vec::new();
+            for file in &files {
+                let t = self.table(file)?;
+                let (dates, tickers, rets) = (t.dates("date")?, t.strings("ticker")?, t.floats("ret")?);
+                rows.extend(dates.into_iter().zip(tickers).zip(rets).map(|((d, t), r)| (d, t, r)));
+            }
+            if rows.is_empty() {
+                return Err("manifest lists no returns/daily/ files".into());
+            }
+            Ok(Returns::from_rows(rows))
         })
     }
 
     pub fn market(&self) -> Result<Arc<HashMap<i32, f64>>> {
+        let files = self.manifest()?.files_in("returns/market/");
         self.market.get(|| {
-            let t = self.table("returns/market.parquet")?;
-            Ok(t.dates("date")?.into_iter().zip(t.floats("ret")?).collect())
+            let mut out = HashMap::new();
+            for file in &files {
+                let t = self.table(file)?;
+                out.extend(t.dates("date")?.into_iter().zip(t.floats("ret")?));
+            }
+            Ok(out)
         })
     }
 

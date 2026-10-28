@@ -1,0 +1,5 @@
+# Only cloud/lambdas and core/ go into the Lambda image.
+*
+!cloud/lambdas/
+!core/
+**/__pycache__

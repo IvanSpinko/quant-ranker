@@ -97,6 +97,18 @@ export interface Quality {
 export interface Settings {
   data_dir: string;
   default_dir: string;
+  custom_dir: boolean;
+  /** Effective cloud URL; empty when the cloud is off. */
+  data_url: string;
+  built_in_url: string | null;
+}
+
+export interface SyncReport {
+  data_date: string;
+  downloaded: number;
+  downloaded_bytes: number;
+  removed: number;
+  files: number;
 }
 
 export const api = {
@@ -108,4 +120,7 @@ export const api = {
   quality: () => invoke<Quality>("quality"),
   getSettings: () => invoke<Settings>("get_settings"),
   setDataDir: (dir: string) => invoke<Settings>("set_data_dir", { dir }),
+  /** "" turns the cloud off, "default" restores the built-in URL. */
+  setDataUrl: (url: string) => invoke<Settings>("set_data_url", { url }),
+  syncData: () => invoke<SyncReport>("sync_data"),
 };

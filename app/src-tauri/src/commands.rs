@@ -1,7 +1,7 @@
 //! Tauri commands called by the web UI. Heavy work runs on a blocking thread.
 
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -10,45 +10,99 @@ use tauri::{AppHandle, Manager, State};
 use crate::backtest::{Config, Summary, performance_summary, run_backtest, yearly_returns};
 use crate::data::{Result, Signal, Store};
 use crate::dates::parse_iso;
+use crate::sync::{HttpSource, SyncReport, sync};
 
 pub struct AppState {
     store: RwLock<Arc<Store>>,
+    settings: Mutex<Settings>,
     settings_path: PathBuf,
+    /// Local folder used when no data URL is configured.
     default_dir: PathBuf,
+    /// Where cloud downloads are kept.
+    cache_dir: PathBuf,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+/// Saved in the app config folder. data_url: None = built-in URL, Some("") = cloud switched off.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Settings {
     data_dir: Option<PathBuf>,
+    #[serde(default)]
+    data_url: Option<String>,
+}
+
+/// Published-data URL baked in at build time (QR_DATA_URL), if any.
+const BUILT_IN_URL: Option<&str> = option_env!("QR_DATA_URL");
+
+impl Settings {
+    fn url(&self) -> Option<String> {
+        match &self.data_url {
+            Some(url) if url.trim().is_empty() => None,
+            Some(url) => Some(url.trim().to_string()),
+            None => BUILT_IN_URL.map(str::to_string),
+        }
+    }
 }
 
 impl AppState {
     pub fn new(app: &AppHandle) -> Self {
         let config_dir = app.path().app_config_dir().unwrap_or_else(|_| PathBuf::from("."));
         let settings_path = config_dir.join("settings.json");
-        let default_dir = default_data_dir(app);
+        let cache_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from(".")).join("published");
+        let default_dir = default_data_dir(&cache_dir);
         let settings: Settings = std::fs::read_to_string(&settings_path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        let dir = settings.data_dir.unwrap_or_else(|| default_dir.clone());
-        Self { store: RwLock::new(Arc::new(Store::new(dir))), settings_path, default_dir }
+        let state = Self {
+            store: RwLock::new(Arc::new(Store::new(PathBuf::new()))),
+            settings: Mutex::new(settings),
+            settings_path,
+            default_dir,
+            cache_dir,
+        };
+        state.reload();
+        state
     }
 
     fn store(&self) -> Arc<Store> {
         self.store.read().unwrap().clone()
     }
+
+    /// Folder the app reads: an explicit folder, else the cloud cache, else the local default.
+    fn data_dir(&self) -> PathBuf {
+        let settings = self.settings.lock().unwrap();
+        match (&settings.data_dir, settings.url()) {
+            (Some(dir), _) => dir.clone(),
+            (None, Some(_)) => self.cache_dir.clone(),
+            (None, None) => self.default_dir.clone(),
+        }
+    }
+
+    /// Drop every cached table so the next request reads the folder again.
+    fn reload(&self) {
+        *self.store.write().unwrap() = Arc::new(Store::new(self.data_dir()));
+    }
+
+    fn save(&self, settings: Settings) -> Result<()> {
+        if let Some(parent) = self.settings_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&self.settings_path, serde_json::to_string_pretty(&settings).unwrap()).map_err(|e| e.to_string())?;
+        *self.settings.lock().unwrap() = settings;
+        self.reload();
+        Ok(())
+    }
 }
 
-/// QR_DATA_DIR if set; in debug builds the repository's data/published; otherwise app data.
-fn default_data_dir(app: &AppHandle) -> PathBuf {
+/// QR_DATA_DIR if set; in debug builds the repository's data/published; otherwise the cache.
+fn default_data_dir(cache_dir: &std::path::Path) -> PathBuf {
     if let Some(dir) = std::env::var_os("QR_DATA_DIR") {
         return PathBuf::from(dir);
     }
     if cfg!(debug_assertions) {
         return PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/published");
     }
-    app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from(".")).join("published")
+    cache_dir.to_path_buf()
 }
 
 async fn blocking<T: Send + 'static>(store: Arc<Store>, f: impl FnOnce(&Store) -> Result<T> + Send + 'static) -> Result<T> {
@@ -333,26 +387,66 @@ pub async fn quality(state: State<'_, AppState>) -> Result<QualityOutput> {
 pub struct SettingsView {
     data_dir: String,
     default_dir: String,
+    custom_dir: bool,
+    /// Effective cloud URL, empty when the cloud is off.
+    data_url: String,
+    built_in_url: Option<&'static str>,
 }
 
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> SettingsView {
-    SettingsView { data_dir: state.store().dir.display().to_string(), default_dir: state.default_dir.display().to_string() }
+    let settings = state.settings.lock().unwrap().clone();
+    SettingsView {
+        data_dir: state.data_dir().display().to_string(),
+        default_dir: state.default_dir.display().to_string(),
+        custom_dir: settings.data_dir.is_some(),
+        data_url: settings.url().unwrap_or_default(),
+        built_in_url: BUILT_IN_URL,
+    }
 }
 
-/// Switch the data folder (empty = default), persist it and drop everything cached.
+/// Read a different folder (empty = back to the cloud cache or the default folder).
 #[tauri::command]
 pub fn set_data_dir(state: State<'_, AppState>, dir: String) -> Result<SettingsView> {
     let dir = dir.trim();
-    let settings = Settings { data_dir: (!dir.is_empty()).then(|| PathBuf::from(dir)) };
-    let path = settings.data_dir.clone().unwrap_or_else(|| state.default_dir.clone());
-    if !path.join("manifest.json").is_file() {
+    let mut settings = state.settings.lock().unwrap().clone();
+    settings.data_dir = (!dir.is_empty()).then(|| PathBuf::from(dir));
+    if let Some(path) = &settings.data_dir
+        && !path.join("manifest.json").is_file()
+    {
         return Err(format!("no manifest.json in {}", path.display()));
     }
-    if let Some(parent) = state.settings_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(&state.settings_path, serde_json::to_string_pretty(&settings).unwrap()).map_err(|e| e.to_string())?;
-    *state.store.write().unwrap() = Arc::new(Store::new(path));
+    state.save(settings)?;
     Ok(get_settings(state))
+}
+
+/// Set the cloud URL ("" switches the cloud off, "default" restores the built-in URL).
+#[tauri::command]
+pub fn set_data_url(state: State<'_, AppState>, url: String) -> Result<SettingsView> {
+    let url = url.trim();
+    let mut settings = state.settings.lock().unwrap().clone();
+    settings.data_url = match url {
+        "default" => None,
+        "" => Some(String::new()),
+        url => {
+            HttpSource::new(url)?;
+            Some(url.trim_end_matches('/').to_string())
+        }
+    };
+    state.save(settings)?;
+    Ok(get_settings(state))
+}
+
+/// Download what changed from the cloud into the data folder, then reload it.
+#[tauri::command]
+pub async fn sync_data(state: State<'_, AppState>) -> Result<SyncReport> {
+    let url = state.settings.lock().unwrap().url().ok_or("no data URL configured")?;
+    let dir = state.data_dir();
+    let report = tauri::async_runtime::spawn_blocking(move || sync(&HttpSource::new(&url)?, &dir))
+        .await
+        .map_err(|e| e.to_string())??;
+    if report.downloaded > 0 || report.removed > 0 {
+        state.reload();
+    }
+    Ok(report)
 }
