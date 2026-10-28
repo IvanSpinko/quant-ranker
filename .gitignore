@@ -18,8 +18,8 @@ node_modules/
 .DS_Store
 
 # Market data and model files stay local or in S3
-data/
-models/
+/data/
+/models/
 *.parquet
 
 # Terraform state and variables (account data, secrets)
