@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Rust and app build output
+target/
+app/dist/
+node_modules/
+
+# IDE and OS files
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# Market data and model files stay local or in S3
+data/
+models/
+*.parquet
+
+# Terraform state and variables (account data, secrets)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+tfplan*
+
+# Secrets
+.env
+*.env
+*.key

@@ -1,0 +1,33 @@
+[project]
+name = "quant-ranker"
+version = "0.1.0"
+description = "Cross-sectional stock ranking with an honest walk-forward backtest"
+readme = "README.md"
+license = "AGPL-3.0-only"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "lightgbm>=4.7.0",
+    "numpy>=2.5.4",
+    "polars>=2.1.0",
+    "pyarrow>=26.0.0",
+    "scikit-learn>=1.9.1",
+    "yfinance>=1.7.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "quant_core"
+module-root = "core"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.4.0",
+    "matplotlib>=3.11.2",
+    "pytest>=9.2.0",
+]
