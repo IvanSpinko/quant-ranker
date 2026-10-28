@@ -35,6 +35,41 @@ up in [research/02_turnover.ipynb](research/02_turnover.ipynb):
 uv run python research/turnover.py
 ```
 
+### Desktop app
+
+The app reads the published file set. Until the cloud pipeline exists, write it locally to
+`data/published/` (needs the two research runs above):
+
+```bash
+uv run python research/publish_local.py
+```
+
+Then start the app from `app/` (the first build compiles the Rust side and takes a few minutes):
+
+```bash
+npm install
+```
+
+```bash
+npm run tauri dev
+```
+
+Rust tests, including the golden test that compares the Rust backtest with the Python one, run
+from `app/src-tauri/`:
+
+```bash
+cargo test
+```
+
+IntelliJ IDEA picks up shared run configurations from `.run/` (App, Data, Research, Tests). They
+use the `.venv` interpreter created by `uv sync` and the Node.js on `PATH`.
+
+After changing the Python backtest, regenerate the golden fixture:
+
+```bash
+uv run python tests/make_golden.py
+```
+
 ## License
 
 [AGPL-3.0](LICENSE)
