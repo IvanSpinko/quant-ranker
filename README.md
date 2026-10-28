@@ -37,8 +37,9 @@ uv run python research/turnover.py
 
 ### Desktop app
 
-The app reads the published file set. Until the cloud pipeline exists, write it locally to
-`data/published/` (needs the two research runs above):
+The app reads the published file set: from the cloud when a data URL is set in Settings, or
+from a local folder. To work without the cloud, write it to `data/published/` (needs the two
+research runs above):
 
 ```bash
 uv run python research/publish_local.py
@@ -68,6 +69,32 @@ After changing the Python backtest, regenerate the golden fixture:
 
 ```bash
 uv run python tests/make_golden.py
+```
+
+### Cloud pipeline (AWS)
+
+Every trading day at 18:30 New York time a Lambda downloads the latest prices, a second one
+scores them with the live model and publishes the changed files behind CloudFront. Needs
+Docker running, Terraform, the AWS CLI with a profile (default `main`) and the research runs
+above. The first deploy also uploads the history:
+
+```bash
+cloud/deploy.sh --backfill
+```
+
+Later code changes redeploy with `cloud/deploy.sh`. Pause the daily runs, resume them, or
+remove everything (data included; the backfill rebuilds it):
+
+```bash
+terraform -chdir=cloud/terraform apply -var schedule_enabled=false
+```
+
+```bash
+terraform -chdir=cloud/terraform apply
+```
+
+```bash
+terraform -chdir=cloud/terraform destroy
 ```
 
 ## License

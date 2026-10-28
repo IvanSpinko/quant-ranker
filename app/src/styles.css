@@ -729,3 +729,25 @@ button {
     position: static;
   }
 }
+
+.sync::before {
+  content: "●";
+  margin-right: 5px;
+}
+
+.sync.running::before {
+  color: var(--accent);
+}
+
+.sync.ok::before {
+  color: var(--pos);
+}
+
+.sync.failed::before {
+  color: var(--neg);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

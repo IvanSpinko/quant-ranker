@@ -43,8 +43,8 @@ the Python run on the real published data when that data is present.
 | `universe.parquet` | Tickers with name, sector and industry |
 | `signals/latest.parquet` | Today's scores and ranks per ticker |
 | `signals/history/<model>.parquet` | Historical out-of-sample scores (walk-forward) per date and ticker, one file per model |
-| `returns/daily.parquet` | Daily close-to-close returns per ticker, used by the backtest and the growth chart |
-| `returns/market.parquet` | Daily SPY returns, the benchmark |
+| `returns/daily/<year>.parquet` | Daily close-to-close returns per ticker, used by the backtest and the growth chart |
+| `returns/market/<year>.parquet` | Daily SPY returns, the benchmark |
 | `features/latest.parquet` | Ranked feature values shown on the stock detail screen |
 | `explain/shap.parquet` | Per-ticker feature contributions (LightGBM TreeSHAP) and the base value |
 | `quality/*.parquet` | Daily IC per model, model comparison, feature importance |
@@ -52,8 +52,25 @@ the Python run on the real published data when that data is present.
 Raw vendor prices are not redistributed. Only derived data is published. Check the data vendor's
 terms before publishing anything.
 
-Until the AWS pipeline exists, `research/publish_local.py` writes the same layout to
-`data/published/`, which debug builds of the app read by default.
+Returns are split by year, so a daily update rewrites only the current year's file (about
+1 MB in total). `research/publish_local.py` writes the same layout to `data/published/`, which
+debug builds of the app read by default when no data URL is set.
+
+### Daily pipeline
+
+- One private bucket: `raw/` (vendor prices by year, universe), `state/` (live model),
+  `published/` (the only prefix CloudFront can read).
+- EventBridge Scheduler starts `ingest` at 18:30 New York time on weekdays. It refreshes the
+  universe, downloads the last days again (late corrections win), gives new index members their
+  full history and drops bars of a session still trading.
+- A successful `ingest` invokes `predict` (Lambda destination). It computes features on the last
+  three years, scores the latest date with the live model and publishes changed files; the
+  manifest is written last.
+- Both functions run the same container image (`cloud/lambdas/Dockerfile`); the logic lives in
+  `quant_core.pipeline` and is tested on a local folder. `cloud/backfill.py` uploads the history
+  once; `cloud/deploy.sh` builds, pushes and applies Terraform.
+- The app downloads `manifest.json`, fetches only files whose SHA-256 changed, verifies each one
+  and keeps working offline on the last complete snapshot.
 
 ### Desktop app screens
 
@@ -112,8 +129,10 @@ core/quant_core/   Python package shared by research and cloud
   validation/      walk-forward splitter, purging, IC metrics
   backtest/        vectorised portfolio engine (Python reference)
 cloud/
-  lambdas/         ingest, predict, retrain handlers
-  terraform/       S3, Lambda, EventBridge, CloudFront, IAM
+  lambdas/         Lambda image and handlers (ingest, predict; retrain in stage 5)
+  terraform/       S3, ECR, Lambda, EventBridge Scheduler, CloudFront, IAM
+  backfill.py      one-off upload of history, model and research results
+  deploy.sh        build and push the image, apply Terraform
 app/               Tauri 2 + React + TypeScript desktop app
 research/          notebooks and experiment notes
 tests/             look-ahead, walk-forward, backtest sanity tests

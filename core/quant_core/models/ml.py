@@ -50,28 +50,44 @@ LGBM_DEFAULTS = {
 
 
 class LGBMModel:
-    """Gradient-boosted trees; LightGBM handles missing values natively."""
+    """Gradient-boosted trees; LightGBM handles missing values natively.
+
+    A fitted model round-trips through to_string / from_string, which is how the cloud
+    pipeline stores the live model.
+    """
 
     def __init__(self, **params):
-        self.model = lgb.LGBMRegressor(**(LGBM_DEFAULTS | params))
+        self.params = LGBM_DEFAULTS | params
+        self.booster: lgb.Booster | None = None
         self.features: list[str] = []
 
     def fit(self, X: pl.DataFrame, y: pl.Series) -> "LGBMModel":
-        self.features = X.columns
-        self.model.fit(X.to_numpy(), y.to_numpy())
+        self.features = list(X.columns)
+        model = lgb.LGBMRegressor(**self.params).fit(X.to_numpy(), y.to_numpy(), feature_name=self.features)
+        self.booster = model.booster_
         return self
 
     def predict(self, X: pl.DataFrame) -> np.ndarray:
-        return self.model.predict(X.to_numpy())
+        return self.booster.predict(X.select(self.features).to_numpy())
 
     def contributions(self, X: pl.DataFrame) -> pl.DataFrame:
         """Per-row SHAP contributions (LightGBM's TreeSHAP) plus the shared base value."""
-        values = self.model.booster_.predict(X.to_numpy(), pred_contrib=True)
+        values = self.booster.predict(X.select(self.features).to_numpy(), pred_contrib=True)
         return pl.DataFrame(values, schema=[*self.features, "base_value"], orient="row")
 
     def feature_importance(self) -> pl.DataFrame:
-        gain = self.model.booster_.feature_importance("gain").astype(float)
+        gain = self.booster.feature_importance("gain").astype(float)
         return pl.DataFrame({"feature": self.features, "gain": gain}).sort("gain", descending=True)
+
+    def to_string(self) -> str:
+        return self.booster.model_to_string()
+
+    @classmethod
+    def from_string(cls, text: str) -> "LGBMModel":
+        model = cls()
+        model.booster = lgb.Booster(model_str=text)
+        model.features = model.booster.feature_name()
+        return model
 
 
 def combine_scores(scores: Mapping[str, pl.DataFrame], weights: Mapping[str, float] | None = None) -> pl.DataFrame:
